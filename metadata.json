@@ -1,0 +1,8 @@
+{
+  "name": "EPhone React OS",
+  "description": "A sophisticated mobile OS simulation featuring AI chat, social feeds, wallet system, and a new Dream Explorer feature, refactored into a modern React architecture.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

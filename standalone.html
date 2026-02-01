@@ -1,0 +1,652 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>EPhone React OS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      .app-transition { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease; }
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+      @keyframes scaleIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "@google/genai": "https://esm.sh/@google/genai@^1.38.0"
+        }
+      }
+    </script>
+</head>
+<body class="bg-black text-slate-900 overflow-hidden select-none touch-pan-x touch-pan-y">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import { GoogleGenAI } from "@google/genai";
+        const { useState, useEffect, useRef, StrictMode } = React;
+        const { createRoot } = ReactDOM;
+
+        // Mock process environment
+        window.process = { env: { API_KEY: '' } };
+
+        // ==========================================
+        // CONSTANTS & TYPES
+        // ==========================================
+        const AppID = {
+            Home: 'home', Chat: 'chat', WeChat: 'wechat', WorldBook: 'worldbook',
+            Beautify: 'beautify', Settings: 'settings', Phone: 'phone',
+            Calendar: 'calendar', CoupleSpace: 'couplespace', Mail: 'mail'
+        };
+
+        const MessageType = {
+            Text: 'text', Image: 'image', System: 'system',
+            Transfer: 'transfer', RedPacket: 'red_packet'
+        };
+
+        // ==========================================
+        // SERVICES
+        // ==========================================
+        
+        // Character Parser (Simplified for standalone)
+        const parseCharacterCard = async (file) => {
+            if (file.type === "application/json") {
+                const text = await file.text();
+                const json = JSON.parse(text);
+                const data = json.data || json;
+                return {
+                    name: data.name || "Unknown",
+                    description: data.description || data.persona || "",
+                    avatar: "https://picsum.photos/200",
+                };
+            }
+            // Simple fallback for images in standalone
+            return {
+                 name: file.name.replace(/\.[^/.]+$/, ""),
+                 description: "Imported Character",
+                 avatar: URL.createObjectURL(file)
+            };
+        };
+
+        // Gemini Service
+        const SETTINGS_KEY = 'ephone_settings';
+        const DEFAULT_MODEL = 'gemini-3-flash-preview';
+        
+        const getSettings = () => {
+            try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (e) { return {}; }
+        };
+
+        const getClient = () => {
+            const settings = getSettings();
+            const apiKey = settings.apiKey || '';
+            const clientOptions = { apiKey };
+            if (settings.baseUrl) clientOptions.baseUrl = settings.baseUrl;
+            return { ai: new GoogleGenAI(clientOptions), model: settings.modelName || DEFAULT_MODEL };
+        };
+
+        const fetchModels = async () => {
+            const { ai } = getClient();
+            try {
+                const res = await ai.models.list();
+                if(res.models) return res.models.map(m => m.name.replace('models/', ''));
+            } catch(e) {}
+            return ['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash-image'];
+        };
+
+        const generateChatResponse = async (history, persona) => {
+            const { ai, model } = getClient();
+            try {
+                const systemInstruction = `You are a roleplay AI. Persona: ${persona}. Keep it short.`;
+                const response = await ai.models.generateContent({
+                    model, contents: history.map(m => ({ role: m.role==='user'?'user':'model', parts:[{text:m.content}] })),
+                    config: { systemInstruction, temperature: 0.8 }
+                });
+                return response.text || "...";
+            } catch (e) { return "[System: API Error - Check Settings]"; }
+        };
+
+        const generateMomentsReaction = async (post, contacts) => {
+            const { ai, model } = getClient();
+            const chars = contacts.map(c => `${c.id} (${c.name}): ${c.description}`).join('\n');
+            try {
+                const prompt = `User post: "${post}". Characters:\n${chars}\nReturn JSON { "likes": [], "comments": [{contactId, name, content}] }`;
+                const res = await ai.models.generateContent({ model, contents: prompt, config: { responseMimeType: "application/json" } });
+                return JSON.parse(res.text);
+            } catch (e) { return { likes:[], comments:[] }; }
+        };
+        
+        const generateAIMomentsPost = async (contacts) => {
+             const { ai, model } = getClient();
+             const eligible = contacts.filter(c => !c.isSystem);
+             if(eligible.length === 0) return null;
+             const chars = eligible.map(c => `${c.id} (${c.name}): ${c.description}`).join('\n');
+             try {
+                const prompt = `Select ONE char to post. Characters:\n${chars}\nReturn JSON { "contactId", "content", "imageDescription" }`;
+                const res = await ai.models.generateContent({ model, contents: prompt, config: { responseMimeType: "application/json" } });
+                return JSON.parse(res.text);
+             } catch(e) { return null; }
+        };
+
+        const generateCoupleInvitationReaction = async (name, persona, note) => {
+            const { ai, model } = getClient();
+            try {
+                const prompt = `User invites you (${name}) to Couple Space. Note: "${note}". Persona: ${persona}. Return JSON { "accepted": boolean, "reply": string }`;
+                const res = await ai.models.generateContent({ model, contents: prompt, config: { responseMimeType: "application/json" } });
+                return JSON.parse(res.text);
+            } catch (e) { return { accepted: true, reply: "Yes!" }; }
+        };
+
+        const generateDiaryReply = async (content, name, persona) => {
+            const { ai, model } = getClient();
+            try {
+                const prompt = `You are ${name} writing a diary reply to your partner. Persona: ${persona}. User wrote: "${content}". Write in First Person. Max 100 words.`;
+                const res = await ai.models.generateContent({ model, contents: prompt, config: { temperature: 0.9 } });
+                return res.text;
+            } catch (e) { return "I read your diary, but I can't write back right now."; }
+        };
+
+        // ==========================================
+        // SHARED COMPONENTS
+        // ==========================================
+        const StatusBar = () => {
+            const [time, setTime] = useState('');
+            useEffect(() => {
+                const update = () => setTime(new Date().toLocaleTimeString('en-US', {hour:'numeric',minute:'2-digit',hour12:false}));
+                update(); const i = setInterval(update, 1000); return () => clearInterval(i);
+            }, []);
+            return (
+                <div className="w-full h-12 flex justify-between items-end px-6 pb-2 text-sm font-semibold text-black z-50 absolute top-0 left-0 pointer-events-none">
+                    <div className="flex-1"><span>{time}</span></div>
+                    <div className="flex gap-1.5 items-center">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+                        <div className="w-6 h-3 border-2 border-current rounded-sm relative ml-1"><div className="absolute top-0 left-0 h-full bg-current" style={{ width: '60%' }}></div></div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Dock = ({ onAppClick }) => (
+            <div className="absolute bottom-8 left-6 right-6 h-20 bg-white/40 backdrop-blur-xl rounded-[28px] flex items-center justify-around px-4 shadow-xl border border-white/40 z-40">
+                {[{id: AppID.WeChat, icon:'💬', c:'green'}, {id: AppID.Mail, icon:'✉️', c:'blue'}, {id: AppID.WorldBook, icon:'📖', c:'indigo'}, {id: AppID.Beautify, icon:'🎨', c:'pink'}].map(app => (
+                    <button key={app.id} onClick={() => onAppClick(app.id)} className="flex flex-col items-center transition-transform active:scale-90 hover:-translate-y-1">
+                        <div className={`w-12 h-12 bg-gradient-to-b from-${app.c}-400 to-${app.c}-500 rounded-2xl flex items-center justify-center text-xl text-white shadow-md border border-white/20`}>{app.icon}</div>
+                    </button>
+                ))}
+            </div>
+        );
+
+        // ==========================================
+        // FEATURE APPS
+        // ==========================================
+        
+        // --- Settings ---
+        const SettingsApp = ({ onBack, isOpen }) => {
+            const [s, setS] = useState({apiKey:'', modelName: DEFAULT_MODEL, baseUrl: ''});
+            const [models, setModels] = useState([]);
+            const [loading, setLoading] = useState(false);
+            const [status, setStatus] = useState('');
+            
+            useEffect(() => { const v = localStorage.getItem(SETTINGS_KEY); if(v) setS(JSON.parse(v)); }, []);
+            const save = () => { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); setStatus('Saved'); setTimeout(()=>setStatus(''), 2000); };
+            const fetch = async () => { setLoading(true); localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); setModels(await fetchModels()); setLoading(false); };
+
+            if(!isOpen) return null;
+            return (
+                <div className="absolute inset-0 bg-gray-100 z-50 app-transition flex flex-col">
+                    <div className="h-24 bg-gray-200/80 backdrop-blur pt-12 px-4 flex justify-between items-center border-b">
+                        <button onClick={onBack} className="text-blue-500">‹ Home</button>
+                        <h1 className="font-bold">Settings</h1>
+                        <div className="w-8"></div>
+                    </div>
+                    <div className="p-4 space-y-4">
+                        <input type="password" value={s.apiKey} onChange={e=>setS({...s, apiKey:e.target.value})} placeholder="API Key" className="w-full p-3 rounded bg-white" />
+                        <div className="flex gap-2">
+                             <input type="text" value={s.modelName} onChange={e=>setS({...s, modelName:e.target.value})} className="flex-1 p-3 rounded bg-white" placeholder="Model" />
+                             <button onClick={fetch} className="bg-white px-4 rounded">{loading?'...':'Fetch'}</button>
+                        </div>
+                        {models.length>0 && <select onChange={e=>setS({...s, modelName:e.target.value})} className="w-full p-2 bg-white">{models.map(m=><option key={m} value={m}>{m}</option>)}</select>}
+                        <button onClick={save} className="w-full bg-blue-600 text-white p-3 rounded font-bold">{status||'Save'}</button>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Wallet ---
+        const WalletApp = ({ onBack, isOpen, onUpdateTheme }) => {
+            if(!isOpen) return null;
+            return (
+                <div className="absolute inset-0 bg-gray-50 z-50 app-transition flex flex-col">
+                    <div className="h-24 bg-pink-500 pt-12 px-4 flex justify-between items-center text-white">
+                        <button onClick={onBack}>‹ Back</button>
+                        <h1 className="font-bold">Beautify</h1>
+                        <div className="w-8"></div>
+                    </div>
+                    <div className="p-4 space-y-4">
+                        <div className="bg-white p-4 rounded-xl shadow-sm">
+                            <h3 className="font-bold mb-2">Wallpaper</h3>
+                            <input type="file" accept="image/*" onChange={(e)=>{
+                                const f = e.target.files[0];
+                                if(f){ const r = new FileReader(); r.onload=ev=>onUpdateTheme('wallpaper',null,ev.target.result); r.readAsDataURL(f); }
+                            }} />
+                        </div>
+                         <div className="bg-white p-4 rounded-xl shadow-sm">
+                            <h3 className="font-bold mb-2">Icons</h3>
+                            <p className="text-xs text-gray-500 mb-2">Tap an app to change icon</p>
+                            <div className="grid grid-cols-4 gap-2">
+                                {[AppID.WeChat, AppID.Mail, AppID.CoupleSpace, AppID.Calendar].map(id => (
+                                    <div key={id} className="text-center">
+                                        <button className="w-12 h-12 bg-gray-100 rounded-xl mb-1" onClick={()=>document.getElementById(`icon-${id}`).click()}>✏️</button>
+                                        <div className="text-[10px]">{id}</div>
+                                        <input id={`icon-${id}`} type="file" className="hidden" accept="image/*" onChange={(e)=>{
+                                            const f = e.target.files[0];
+                                            if(f){ const r = new FileReader(); r.onload=ev=>onUpdateTheme('icon',id,ev.target.result); r.readAsDataURL(f); }
+                                        }} />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Calendar (Shared Diary) ---
+        const CalendarApp = ({ onBack, isOpen }) => {
+            const [date, setDate] = useState(new Date());
+            const [view, setView] = useState('calendar');
+            const [selDate, setSelDate] = useState(null);
+            const [entries, setEntries] = useState({});
+            const [compose, setCompose] = useState('');
+            const [sending, setSending] = useState(false);
+            const [opened, setOpened] = useState(null);
+
+            useEffect(()=>{
+                if(!isOpen) return;
+                const saved = localStorage.getItem('ephone_calendar_diary');
+                if(saved) setEntries(JSON.parse(saved));
+            },[isOpen]);
+
+            useEffect(()=>{ if(Object.keys(entries).length) localStorage.setItem('ephone_calendar_diary', JSON.stringify(entries)); },[entries]);
+
+            const toStr = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+
+            const handleExchange = async () => {
+                if(!compose.trim()) return;
+                setSending(true);
+                const newEntry = { user: compose, partner: null };
+                setEntries(prev => ({...prev, [selDate]: newEntry}));
+                
+                const p = JSON.parse(localStorage.getItem('ephone_couple_partner')||'{}');
+                try {
+                    await new Promise(r=>setTimeout(r,1000));
+                    const reply = await generateDiaryReply(compose, p.name||'Partner', p.description||'Lover');
+                    setEntries(prev => ({...prev, [selDate]: {...prev[selDate], partner: reply}}));
+                } catch(e){}
+                setSending(false); setCompose(''); setView('mailbox');
+            };
+
+            if(!isOpen) return null;
+            return (
+                <div className="absolute inset-0 bg-white z-50 app-transition flex flex-col">
+                    <div className="h-24 pt-12 px-6 flex justify-between items-center bg-white border-b">
+                         <button onClick={()=>view==='calendar'?onBack():setView(view==='compose'?'mailbox':'calendar')} className="text-xl text-gray-600">‹</button>
+                         <h1 className="font-serif text-lg">{view==='calendar'?'Calendar':view==='mailbox'?'Mailbox':'New Letter'}</h1>
+                         <div className="w-6"></div>
+                    </div>
+                    {view==='calendar' && (
+                        <div className="p-4">
+                            <h2 className="text-3xl font-light mb-4">{date.toLocaleString('default',{month:'long'})}</h2>
+                            <div className="grid grid-cols-7 gap-y-2">
+                                {Array.from({length: new Date(date.getFullYear(), date.getMonth(), 1).getDay()}).map((_,i)=><div key={'e'+i}/>)}
+                                {Array.from({length: new Date(date.getFullYear(), date.getMonth()+1, 0).getDate()}).map((_,i)=>{
+                                    const dStr = toStr(new Date(date.getFullYear(), date.getMonth(), i+1));
+                                    return (
+                                        <div key={i} onClick={()=>{setSelDate(dStr);setOpened(null);setView('mailbox')}} className="aspect-square flex justify-center items-center relative cursor-pointer">
+                                            <div className={`w-8 h-8 flex justify-center items-center rounded-full ${toStr(new Date())===dStr?'bg-black text-white':''}`}>
+                                                {i+1}
+                                                {entries[dStr] && <div className="absolute -bottom-1 text-[8px]">💌</div>}
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    )}
+                    {view==='mailbox' && (
+                        <div className="flex-1 bg-gray-50 p-6 flex flex-col items-center">
+                            <h2 className="font-serif mb-6">{selDate}</h2>
+                            {!opened ? (
+                                entries[selDate] ? (
+                                    <div className="space-y-4 w-full max-w-xs">
+                                        <div onClick={()=>setOpened('user')} className="bg-white p-4 shadow border-l-4 border-blue-300 cursor-pointer">From Me</div>
+                                        {entries[selDate].partner ? (
+                                            <div onClick={()=>setOpened('partner')} className="bg-white p-4 shadow border-l-4 border-pink-300 cursor-pointer">From Partner</div>
+                                        ) : <div className="text-center text-sm text-gray-400">Waiting for reply...</div>}
+                                    </div>
+                                ) : <button onClick={()=>setView('compose')} className="bg-black text-white px-8 py-3 rounded-full font-serif shadow-lg">Write Letter</button>
+                            ) : (
+                                <div className="bg-white p-8 shadow-sm flex-1 w-full font-serif whitespace-pre-wrap relative" style={{backgroundImage: 'linear-gradient(#f1f1f1 1px, transparent 1px)', backgroundSize: '100% 2rem', lineHeight: '2rem'}}>
+                                    {opened==='user'?entries[selDate].user:entries[selDate].partner}
+                                    <button onClick={()=>setOpened(null)} className="absolute bottom-4 right-4 text-gray-400">Close</button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {view==='compose' && (
+                        <div className="flex-1 flex flex-col p-6 relative">
+                            {sending && <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-center">Delivering...</div>}
+                            <textarea value={compose} onChange={e=>setCompose(e.target.value)} className="flex-1 resize-none outline-none font-serif text-lg leading-loose" placeholder="Write here..." autoFocus />
+                            <button onClick={handleExchange} className="bg-black text-white py-3 rounded-full">Exchange</button>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // --- Couple Space (With Contacts Integration) ---
+        const CoupleSpaceApp = ({ onBack, isOpen, onOpenExternalApp }) => {
+            const [partner, setPartner] = useState(()=>JSON.parse(localStorage.getItem('ephone_couple_partner')||'null'));
+            const [wp, setWp] = useState(()=>localStorage.getItem('ephone_couple_wallpaper')||'');
+            const [contacts, setContacts] = useState(()=>JSON.parse(localStorage.getItem('ephone_contacts')||'[]'));
+            const [step, setStep] = useState('select');
+            const [selId, setSelId] = useState('');
+            const [note, setNote] = useState('');
+            const [res, setRes] = useState(null);
+
+            // Default + User Contacts
+            const defaults = [
+                {id:'c1', name:'Alice (AI)', avatar:'https://picsum.photos/200?1', description:'Friendly AI'},
+                {id:'c3', name:'Luna', avatar:'https://picsum.photos/200?3', description:'Poetic girl'}
+            ];
+            // Merge & Deduplicate
+            const candidates = [...contacts, ...defaults].filter((v,i,a)=>a.findIndex(t=>(t.id===v.id))===i);
+
+            useEffect(()=>{ if(partner) localStorage.setItem('ephone_couple_partner', JSON.stringify(partner)); localStorage.setItem('ephone_couple_wallpaper', wp); },[partner, wp]);
+            useEffect(()=>{
+                if(!selId && candidates.length > 0) setSelId(candidates[0].id);
+            }, [contacts]);
+
+            const handleInvite = async () => {
+                if(!note) return alert('Write a note!');
+                setStep('sending');
+                const char = candidates.find(c=>c.id===selId);
+                const r = await generateCoupleInvitationReaction(char.name, char.description, note);
+                setRes(r); setStep('result');
+            };
+
+            const enter = () => {
+                if(res?.accepted) setPartner(candidates.find(c=>c.id===selId));
+                else { setStep('select'); setRes(null); }
+            };
+
+            if(!isOpen) return null;
+            if(!partner) return (
+                <div className="absolute inset-0 bg-white z-50 app-transition flex flex-col">
+                    <div className="h-24 bg-pink-50 pt-12 px-4 flex justify-between items-center"><button onClick={onBack}>Cancel</button><h1 className="text-pink-500 font-bold">Couple Space</h1><div className="w-12"/></div>
+                    <div className="flex-1 p-6 flex flex-col items-center justify-center space-y-6">
+                        {step==='select' && (
+                            <div className="w-full max-w-sm space-y-4">
+                                <h2 className="text-xl font-bold text-center">Invite Partner</h2>
+                                <div className="flex gap-3 overflow-x-auto pb-2">
+                                    {candidates.map(c=>(
+                                        <div key={c.id} onClick={()=>setSelId(c.id)} className={`flex flex-col items-center min-w-[70px] cursor-pointer p-2 rounded-xl border ${selId===c.id?'border-pink-500 bg-pink-50':'border-transparent opacity-60'}`}>
+                                            <img src={c.avatar} className="w-10 h-10 rounded-full object-cover"/>
+                                            <span className="text-[10px] truncate w-full text-center mt-1">{c.name.split(' ')[0]}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                                <textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Write a note..." className="w-full h-24 border p-3 rounded-xl"/>
+                                <button onClick={handleInvite} className="w-full bg-pink-500 text-white py-3 rounded-xl font-bold">Send</button>
+                            </div>
+                        )}
+                        {step==='sending' && <div className="animate-pulse">Sending Invitation...</div>}
+                        {step==='result' && (
+                            <div className="text-center p-6 border rounded-2xl shadow-xl w-full max-w-xs">
+                                <h3 className="font-bold text-lg mb-2">{res.accepted?'Accepted!':'Declined'}</h3>
+                                <p className="italic text-gray-500 mb-6">"{res.reply}"</p>
+                                <button onClick={enter} className="bg-pink-500 text-white w-full py-2 rounded-xl">{res.accepted?'Enter':'Retry'}</button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="absolute inset-0 bg-pink-50 z-50 app-transition flex flex-col" style={wp?{backgroundImage:`url(${wp})`,backgroundSize:'cover'}:{}}>
+                     {wp && <div className="absolute inset-0 bg-white/30 backdrop-blur-sm z-0"/>}
+                     <div className="h-24 pt-12 px-4 flex justify-between items-center z-10">
+                        <button onClick={onBack} className="w-10 h-10 bg-white/50 rounded-full flex justify-center items-center">‹</button>
+                        <h1 className="font-bold">Couple Space</h1>
+                        <div className="w-10"><input type="file" className="hidden" id="wp-up" onChange={e=>{const f=e.target.files[0];if(f){const r=new FileReader();r.onload=ev=>setWp(ev.target.result);r.readAsDataURL(f)}}} /><button onClick={()=>document.getElementById('wp-up').click()}>⚙️</button></div>
+                     </div>
+                     <div className="flex-1 p-6 z-10 flex flex-col gap-4 overflow-y-auto">
+                        <div className="flex justify-between items-center px-4">
+                            <div className="text-center"><img src="https://ui-avatars.com/api/?name=Me" className="w-14 h-14 rounded-full border-2 border-white"/><span className="text-xs font-bold">Me</span></div>
+                            <div className="text-center"><div className="text-3xl">❤️</div><div className="text-xs font-bold text-pink-500">In Love</div></div>
+                            <div className="text-center"><img src={partner.avatar} className="w-14 h-14 rounded-full border-2 border-white"/><span className="text-xs font-bold">{partner.name.split(' ')[0]}</span></div>
+                        </div>
+                        <div className="grid grid-cols-4 gap-2 mt-4">
+                            {[{icon:'📅',l:'Calendar',id:AppID.Calendar}].map(i=>(
+                                <div key={i.l} onClick={()=>i.id && onOpenExternalApp(i.id)} className="bg-white/60 p-3 rounded-xl flex flex-col items-center cursor-pointer active:scale-95">
+                                    <span>{i.icon}</span><span className="text-[10px] font-bold">{i.l}</span>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="bg-white/70 rounded-2xl p-4 mt-auto mb-8">
+                            <div className="text-xs font-bold text-gray-500 mb-2">Reply from {partner.name}</div>
+                            <div className="text-sm italic text-center p-2">"I'm always here for you."</div>
+                        </div>
+                     </div>
+                </div>
+            );
+        };
+
+        // --- Chat App (Simplified) ---
+        const ChatApp = ({ onBack, isOpen, appName, onOpenExternalApp }) => {
+            const [contacts, setContacts] = useState(()=>JSON.parse(localStorage.getItem('ephone_contacts')||'[]'));
+            const [chats, setChats] = useState(()=>JSON.parse(localStorage.getItem('ephone_chats')||'[]'));
+            const [tab, setTab] = useState('chats');
+            const [activeId, setActiveId] = useState(null);
+            const [input, setInput] = useState('');
+            const fileRef = useRef(null);
+
+            // Default contacts if empty
+            useEffect(()=>{
+                if(contacts.length===0){
+                    const def = [{id:'c1', name:'Alice (AI)', avatar:'https://picsum.photos/200?1', description:'Friendly AI'}];
+                    setContacts(def); localStorage.setItem('ephone_contacts', JSON.stringify(def));
+                }
+            },[]);
+            useEffect(()=>{ localStorage.setItem('ephone_contacts', JSON.stringify(contacts)); },[contacts]);
+            useEffect(()=>{ localStorage.setItem('ephone_chats', JSON.stringify(chats)); },[chats]);
+
+            const activeChat = chats.find(c=>c.id===activeId);
+            
+            const send = async () => {
+                if(!input.trim()) return;
+                const msg = {id:Date.now(), role:'user', content:input};
+                setChats(prev=>prev.map(c=>c.id===activeId?{...c, messages:[...c.messages, msg]}:c));
+                setInput('');
+                const res = await generateChatResponse([...activeChat.messages, msg], activeChat.persona);
+                setChats(prev=>prev.map(c=>c.id===activeId?{...c, messages:[...c.messages, {id:Date.now()+1, role:'assistant', content:res}]}:c));
+            };
+
+            const startChat = (c) => {
+                const ex = chats.find(ch=>ch.contactId===c.id);
+                if(ex) setActiveId(ex.id);
+                else {
+                    const newC = {id:'ch_'+Date.now(), contactId:c.id, name:c.name, avatar:c.avatar, persona:c.description, messages:[]};
+                    setChats([newC, ...chats]); setActiveId(newC.id);
+                }
+            };
+            
+            const importChar = async (e) => {
+                const f = e.target.files[0]; if(!f) return;
+                const c = await parseCharacterCard(f);
+                if(c) {
+                    const newC = {id:'c_'+Date.now(), ...c};
+                    setContacts([...contacts, newC]);
+                    alert('Character Imported!');
+                }
+                e.target.value = '';
+            };
+            
+            const createChar = () => {
+                const name = prompt("Name:"); if(!name) return;
+                const desc = prompt("Persona:");
+                setContacts([...contacts, {id:'c_'+Date.now(), name, description:desc||'', avatar:`https://ui-avatars.com/api/?name=${name}`}]);
+            };
+
+            if(!isOpen) return null;
+            return (
+                <div className="absolute inset-0 bg-gray-100 z-50 app-transition flex flex-col">
+                    <div className="h-24 bg-white/90 pt-12 px-4 flex justify-between items-center border-b z-10">
+                        {activeId ? <button onClick={()=>setActiveId(null)} className="text-blue-500">‹ Back</button> : <button onClick={onBack} className="text-blue-500">‹ Home</button>}
+                        <h1 className="font-bold">{activeId?activeChat.name:tab==='chats'?appName:'Contacts'}</h1>
+                        {!activeId && <button onClick={()=>fileRef.current.click()} className="text-xl">+</button>}
+                        <input type="file" ref={fileRef} className="hidden" onChange={importChar} />
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto pb-20 p-0">
+                        {activeId ? (
+                            <div className="p-4 space-y-4">
+                                {activeChat.messages.map(m=>(
+                                    <div key={m.id} className={`flex ${m.role==='user'?'justify-end':'justify-start'}`}>
+                                        <div className={`max-w-[80%] p-3 rounded-xl ${m.role==='user'?'bg-green-500 text-white':'bg-white text-black'}`}>{m.content}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : tab === 'chats' ? (
+                            <div className="divide-y bg-white">
+                                {chats.map(c=>(
+                                    <div key={c.id} onClick={()=>setActiveId(c.id)} className="p-4 flex items-center gap-3 cursor-pointer hover:bg-gray-50">
+                                        <img src={c.avatar} className="w-12 h-12 rounded bg-gray-200 object-cover"/>
+                                        <div><div className="font-bold">{c.name}</div><div className="text-sm text-gray-500 truncate w-40">{c.messages.at(-1)?.content||'No messages'}</div></div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : tab === 'contacts' ? (
+                            <div className="divide-y bg-white">
+                                <button onClick={createChar} className="w-full text-left p-4 text-blue-500 font-bold bg-gray-50">Create New Character</button>
+                                {contacts.map(c=>(
+                                    <div key={c.id} onClick={()=>startChat(c)} className="p-4 flex items-center gap-3 cursor-pointer hover:bg-gray-50">
+                                        <img src={c.avatar} className="w-10 h-10 rounded bg-gray-200 object-cover"/>
+                                        <div className="font-bold">{c.name}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="p-4 space-y-2">
+                                <div onClick={()=>onOpenExternalApp(AppID.CoupleSpace)} className="bg-white p-4 rounded cursor-pointer">Couple Space</div>
+                                <div onClick={()=>onOpenExternalApp(AppID.Calendar)} className="bg-white p-4 rounded cursor-pointer">Calendar</div>
+                            </div>
+                        )}
+                    </div>
+
+                    {activeId ? (
+                         <div className="absolute bottom-0 w-full bg-gray-100 p-2 flex gap-2 border-t">
+                            <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} className="flex-1 p-2 rounded bg-white" />
+                            <button onClick={send} className="bg-green-500 text-white px-4 rounded">Send</button>
+                         </div>
+                    ) : (
+                        <div className="absolute bottom-0 w-full h-16 bg-gray-50 border-t flex justify-around items-center text-xs">
+                             <button onClick={()=>setTab('chats')} className="flex flex-col items-center"><span className="text-xl">💬</span>Chats</button>
+                             <button onClick={()=>setTab('contacts')} className="flex flex-col items-center"><span className="text-xl">👥</span>Contacts</button>
+                             <button onClick={()=>setTab('discover')} className="flex flex-col items-center"><span className="text-xl">🧭</span>Discover</button>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // ==========================================
+        // ROOT APP
+        // ==========================================
+        const App = () => {
+            const [active, setActive] = useState(null);
+            const [wp, setWp] = useState(localStorage.getItem('ephone_wallpaper') || 'https://images.unsplash.com/photo-1513569771920-c9e1d31714b0?auto=format&fit=crop&w=800');
+            const [icons, setIcons] = useState(JSON.parse(localStorage.getItem('ephone_icons')||'{}'));
+
+            const updateTheme = (type, id, val) => {
+                if(type==='wallpaper'){ setWp(val); localStorage.setItem('ephone_wallpaper', val); }
+                if(type==='icon'){ const n={...icons, [id]:val}; setIcons(n); localStorage.setItem('ephone_icons', JSON.stringify(n)); }
+            };
+
+            return (
+                <div className="h-screen w-full flex justify-center items-center bg-[#1c1c1e]">
+                    <div className="relative w-full h-full sm:w-[375px] sm:h-[812px] bg-black sm:rounded-[50px] overflow-hidden shadow-2xl border-[8px] border-[#2c2c2e]">
+                        <div className="w-full h-full relative flex flex-col" style={{backgroundImage:`url(${wp})`, backgroundSize:'cover', backgroundPosition:'center'}}>
+                            <div className="absolute inset-0 bg-black/10 pointer-events-none"></div>
+                            <StatusBar />
+                            
+                            {/* Home Screen */}
+                            <div className={`flex-1 pt-16 px-6 pb-32 transition-all duration-500 ${active ? 'scale-90 opacity-0 pointer-events-none translate-y-10' : 'scale-100 opacity-100'}`}>
+                                <div className="mb-8 text-white drop-shadow-md">
+                                    <h1 className="text-6xl font-light">16:20</h1>
+                                    <p className="text-sm font-bold opacity-80 uppercase tracking-widest">Tuesday</p>
+                                </div>
+                                
+                                {/* Widget */}
+                                <div onClick={()=>setActive(AppID.CoupleSpace)} className="bg-white/40 backdrop-blur-xl rounded-3xl p-4 mb-8 border border-white/50 shadow-lg cursor-pointer active:scale-95 transition-transform flex items-center gap-4">
+                                    <div className="w-14 h-14 bg-pink-200 rounded-full border-2 border-white overflow-hidden"><img src="https://picsum.photos/200?love" className="w-full h-full object-cover"/></div>
+                                    <div>
+                                        <div className="text-2xl font-bold text-gray-800">Love</div>
+                                        <div className="text-xs text-gray-600 font-bold">Couple Space</div>
+                                    </div>
+                                </div>
+
+                                {/* App Grid */}
+                                <div className="grid grid-cols-4 gap-y-6 gap-x-2">
+                                     {[
+                                         {id:AppID.Calendar, l:'Memory', i:'🌸', c:'rose'},
+                                         {id:AppID.WeChat, l:'Chat', i:'💬', c:'emerald'},
+                                         {id:AppID.WorldBook, l:'Dream', i:'🦄', c:'indigo'},
+                                         {id:AppID.Mail, l:'Msg', i:'✉️', c:'sky'},
+                                         {id:AppID.CoupleSpace, l:'Space', i:'💌', c:'pink'},
+                                         {id:AppID.Beautify, l:'Theme', i:'🎨', c:'orange'},
+                                         {id:AppID.Settings, l:'Config', i:'⚙️', c:'slate'},
+                                         {id:AppID.Phone, l:'Phone', i:'📞', c:'teal'}
+                                     ].map(app => (
+                                         <button key={app.id} onClick={()=>setActive(app.id)} className="flex flex-col items-center gap-1 active:scale-90 transition-transform group">
+                                             <div className={`w-[60px] h-[60px] rounded-[20px] flex items-center justify-center text-2xl shadow-sm border border-white/40 bg-white/30 backdrop-blur-md overflow-hidden relative`}>
+                                                 {icons[app.id] ? <img src={icons[app.id]} className="w-full h-full object-cover"/> : <span>{app.i}</span>}
+                                             </div>
+                                             <span className="text-[10px] font-bold text-white drop-shadow-md">{app.l}</span>
+                                         </button>
+                                     ))}
+                                </div>
+                            </div>
+
+                            {/* Floating Dock */}
+                            <div className={`transition-all duration-500 ${active ? 'translate-y-32 opacity-0' : 'translate-y-0 opacity-100'}`}>
+                                <Dock onAppClick={setActive} />
+                            </div>
+
+                            {/* Apps Layer */}
+                            <SettingsApp isOpen={active===AppID.Settings} onBack={()=>setActive(null)} />
+                            <WalletApp isOpen={active===AppID.Beautify} onBack={()=>setActive(null)} onUpdateTheme={updateTheme} />
+                            <CalendarApp isOpen={active===AppID.Calendar} onBack={()=>setActive(null)} />
+                            <CoupleSpaceApp isOpen={active===AppID.CoupleSpace} onBack={()=>setActive(null)} onOpenExternalApp={setActive} />
+                            <ChatApp isOpen={active===AppID.Chat || active===AppID.WeChat} appName="WeChat" onBack={()=>setActive(null)} onOpenExternalApp={setActive} />
+                            <ChatApp isOpen={active===AppID.Mail} appName="Messages" onBack={()=>setActive(null)} onOpenExternalApp={setActive} />
+                            
+                            {/* Home Indicator */}
+                            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-32 h-1 bg-white/20 rounded-full z-50"></div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<StrictMode><App /></StrictMode>);
+    </script>
+</body>
+</html>
+    
