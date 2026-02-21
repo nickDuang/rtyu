@@ -375,33 +375,28 @@ const CalendarApp: React.FC<CalendarAppProps> = ({ onBack, isOpen }) => {
           <div className="flex-1 bg-white flex flex-col relative animate-[fadeIn_0.3s]">
               {isSending && (
                   <div className="absolute inset-0 bg-white/80 z-50 flex flex-col items-center justify-center backdrop-blur-sm">
-                      <div className="animate-bounce text-4xl mb-2">🕊️</div>
-                      <p className="font-serif text-gray-500 italic">Delivering your letter...</p>
+                      <div className="animate-bounce text-4xl mb-4">🕊️</div>
+                      <p className="text-gray-500 font-serif">Delivering to {partner?.name}...</p>
                   </div>
               )}
               
-              <div className="flex-1 p-8">
-                  <div className="h-full flex flex-col">
-                      <div className="text-xs text-gray-400 font-serif italic mb-6 text-center">
-                          {selectedDateStr}
-                      </div>
-                      <textarea 
-                        value={composeText}
-                        onChange={(e) => setComposeText(e.target.value)}
-                        placeholder="Write whatever is on your mind..."
-                        className="flex-1 w-full resize-none outline-none font-serif text-lg text-gray-700 leading-relaxed placeholder:text-gray-300"
-                        autoFocus
-                      />
-                  </div>
+              <div className="p-6 flex-1 flex flex-col">
+                  <div className="mb-4 text-xs text-gray-400 uppercase tracking-widest text-center">To {partner?.name || 'My Love'}</div>
+                  <textarea 
+                      value={composeText}
+                      onChange={(e) => setComposeText(e.target.value)}
+                      placeholder="Write your thoughts here..."
+                      className="flex-1 w-full resize-none outline-none font-serif text-lg text-gray-700 leading-loose placeholder-gray-300"
+                      autoFocus
+                  />
               </div>
-
-              <div className="p-6 border-t border-gray-100 flex justify-end">
+              <div className="p-4 border-t border-gray-100 flex justify-end">
                   <button 
                     onClick={handleExchange}
-                    disabled={!composeText.trim()}
-                    className="bg-black text-white px-6 py-2 rounded-full font-serif disabled:opacity-30 disabled:cursor-not-allowed"
+                    disabled={!composeText.trim() || isSending}
+                    className="bg-black text-white px-8 py-3 rounded-full font-serif font-bold shadow-lg disabled:opacity-50 hover:bg-gray-800 transition-colors"
                   >
-                      Exchange
+                      Send Letter
                   </button>
               </div>
           </div>
@@ -410,220 +405,94 @@ const CalendarApp: React.FC<CalendarAppProps> = ({ onBack, isOpen }) => {
 
   if (!isOpen) return null;
 
-  const handleBack = () => {
-      if (view === 'compose') setView('mailbox');
-      else if (view === 'mailbox') setView('calendar');
-      else onBack();
-  };
-
   return (
-    <div className="absolute inset-0 bg-white flex flex-col z-50 app-transition">
-      {/* Header */}
-      <div className="h-24 pt-12 px-6 flex items-center justify-between z-10 bg-white border-b border-gray-50">
-          <button onClick={handleBack} className="text-gray-600 w-8 h-8 flex items-center justify-center">
-              <span className="text-xl">‹</span>
-          </button>
-          
-          <h1 className="font-serif text-lg text-gray-800 tracking-wide">
-              {view === 'calendar' ? 'Memory Calendar' : 
-               view === 'mailbox' ? 'Mailbox' : 'New Letter'}
-          </h1>
+    <div className="absolute inset-0 bg-white z-50 flex flex-col app-transition">
+        
+        {/* Header */}
+        <div className="h-24 pt-12 px-6 flex items-center justify-between bg-white border-b border-gray-100 z-10 sticky top-0">
+            <button 
+                onClick={() => {
+                    if (view === 'calendar') onBack();
+                    else setView('calendar');
+                }}
+                className="w-10 h-10 flex items-center justify-center text-gray-500 hover:bg-gray-100 rounded-full transition-colors"
+            >
+                ‹
+            </button>
+            <h1 className="font-serif font-bold text-xl text-gray-800">
+                {view === 'calendar' ? currentDate.toLocaleDateString('default', { month: 'long', year: 'numeric' }) : 
+                 view === 'mailbox' ? 'Mailbox' : 'New Letter'}
+            </h1>
+            <button 
+                onClick={() => {
+                    if(view === 'calendar') setIsPeriodMode(!isPeriodMode);
+                    else { setShowReminderConfig(true); }
+                }}
+                className={`w-10 h-10 flex items-center justify-center rounded-full transition-colors ${isPeriodMode ? 'bg-rose-100 text-rose-500' : 'text-gray-400 hover:bg-gray-100'}`}
+            >
+                {view === 'calendar' ? '🩸' : '⚙️'}
+            </button>
+        </div>
 
-          {view === 'calendar' ? (
-             <div className="flex items-center gap-2">
-                 <button 
-                    onClick={() => setShowReminderConfig(true)}
-                    className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 active:scale-95 transition-transform"
-                >
-                    <span className="text-lg">🔔</span>
-                </button>
-                 <button 
-                    onClick={() => setIsPeriodMode(!isPeriodMode)}
-                    className={`transition-all duration-300 w-8 h-8 flex items-center justify-center ${isPeriodMode ? 'text-rose-500 scale-110' : 'text-gray-300 opacity-50 grayscale hover:grayscale-0'}`}
-                >
-                    🌸
-                </button>
-            </div>
-          ) : (
-             <div className="w-8"></div>
-          )}
-      </div>
-
-      {/* Main Content Switcher */}
-      {view === 'calendar' && (
-          <>
-            <div className="px-6 py-4 flex justify-between items-end">
-                <div>
-                    <h2 className="text-3xl font-light text-gray-800 tracking-tight">
-                        {currentDate.toLocaleString('default', { month: 'long' })}
-                    </h2>
-                    <p className="text-gray-400 text-sm">{currentDate.getFullYear()}</p>
-                </div>
-                <div className="flex gap-4 pb-1">
-                    <button onClick={() => setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth() - 1)))} className="text-gray-400">←</button>
-                    <button onClick={() => setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth() + 1)))} className="text-gray-400">→</button>
-                </div>
-            </div>
-
-            <div className="px-4 pb-4">
-                <div className="grid grid-cols-7 mb-2 text-xs text-gray-300 font-bold text-center uppercase tracking-wider">
-                    <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
-                </div>
-                <div className="grid grid-cols-7 gap-y-2">
-                    {renderCalendar()}
-                </div>
-            </div>
-
-            {isPeriodMode && (
-                <div className="text-center mt-4 animate-[fadeIn_0.3s]">
-                    <p className="text-xs text-rose-400 font-medium tracking-wide">Select days to mark privately.</p>
+        {/* Content */}
+        <div className="flex-1 overflow-hidden flex flex-col relative">
+            {view === 'calendar' && (
+                <div className="flex-1 overflow-y-auto p-4 animate-[fadeIn_0.3s]">
+                    <div className="grid grid-cols-7 mb-4 text-center">
+                        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(d => (
+                            <div key={d} className="text-xs font-bold text-gray-300 py-2">{d}</div>
+                        ))}
+                    </div>
+                    <div className="grid grid-cols-7 gap-y-4 justify-items-center">
+                        {renderCalendar()}
+                    </div>
+                    
+                    {/* Legend / Info */}
+                    <div className="mt-8 px-4">
+                        <div className="flex items-center gap-6 text-xs text-gray-400 justify-center">
+                            <div className="flex items-center gap-2">
+                                <span className="w-2 h-2 bg-black rounded-full"></span>
+                                <span>Today</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <span>💌</span>
+                                <span>Diary Entry</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <span className="w-2 h-2 bg-rose-400 rounded-full"></span>
+                                <span>Period</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
-            
-            {/* Bottom Decoration for Calendar View */}
-            <div className="flex-1 bg-gray-50 relative overflow-hidden mt-4 rounded-t-[40px] shadow-inner p-8 flex flex-col items-center justify-center text-center">
-                <span className="text-4xl mb-3 opacity-80">💌</span>
-                <p className="font-serif text-gray-500 text-sm italic max-w-xs">
-                    "Every day is a letter waiting to be written."
-                </p>
-                <p className="text-xs text-gray-400 mt-2">Tap a date to open the Exchange Diary.</p>
+
+            {view === 'mailbox' && renderMailbox()}
+            {view === 'compose' && renderCompose()}
+        </div>
+
+        {/* Period Alert Modal */}
+        {showPeriodAlert && (
+            <div className="absolute inset-0 bg-black/60 z-[100] flex items-center justify-center p-6 animate-[fadeIn_0.2s]">
+                <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl relative">
+                    <div className="flex items-start gap-4">
+                        <div className="relative">
+                            <img src={reminderContact?.avatar} className="w-14 h-14 rounded-full object-cover border-2 border-white shadow-sm" />
+                            <div className="absolute -bottom-1 -right-1 bg-red-400 text-white text-[10px] px-1.5 py-0.5 rounded-full border border-white">❤️</div>
+                        </div>
+                        <div className="flex-1">
+                            <h3 className="font-bold text-gray-800 text-sm mb-1">{reminderContact?.name}</h3>
+                            <div className="bg-pink-50 p-3 rounded-xl rounded-tl-none text-xs text-gray-600 leading-relaxed relative">
+                                {isGeneratingMessage ? <span className="animate-pulse">Thinking...</span> : periodMessage}
+                            </div>
+                        </div>
+                    </div>
+                    <button onClick={handleDismissAlert} className="mt-4 w-full bg-pink-100 text-pink-600 font-bold py-2 rounded-xl text-xs hover:bg-pink-200">
+                        Thanks, I will!
+                    </button>
+                </div>
             </div>
-          </>
-      )}
-
-      {view === 'mailbox' && renderMailbox()}
-      {view === 'compose' && renderCompose()}
-
-      {/* --- Configuration Modal --- */}
-      {showReminderConfig && (
-          <div className="absolute inset-0 bg-black/50 z-[100] flex items-center justify-center p-6">
-              <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-xl">
-                  <h3 className="text-lg font-bold text-gray-800 mb-2">Monthly Reminder</h3>
-                  <p className="text-gray-500 text-sm mb-6">Receive a caring reminder on two specific days each month.</p>
-                  
-                  {/* Select Contact */}
-                  <div className="mb-4">
-                      <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Reminder Character</label>
-                      <select 
-                          value={periodSettings.contactId || ''} 
-                          onChange={(e) => setPeriodSettings(p => ({ ...p, contactId: e.target.value }))}
-                          className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm"
-                      >
-                          <option value="">{partner ? `${partner.name} (Partner)` : "Select a contact..."}</option>
-                          {allContacts.map(c => (
-                              <option key={c.id} value={c.id}>{c.name}</option>
-                          ))}
-                      </select>
-                  </div>
-
-                  <div className="flex items-center justify-between mb-6">
-                      <span className="font-medium text-gray-700">Enable Reminders</span>
-                      <button 
-                        onClick={() => setPeriodSettings(p => ({ ...p, enabled: !p.enabled }))}
-                        className={`w-12 h-6 rounded-full p-1 transition-colors ${periodSettings.enabled ? 'bg-rose-400' : 'bg-gray-300'}`}
-                      >
-                          <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${periodSettings.enabled ? 'translate-x-6' : 'translate-x-0'}`}></div>
-                      </button>
-                  </div>
-
-                  {periodSettings.enabled && (
-                      <div className="grid grid-cols-2 gap-4 mb-8">
-                          <div>
-                              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Day 1</label>
-                              <select 
-                                value={periodSettings.days[0]} 
-                                onChange={(e) => setPeriodSettings(p => ({ ...p, days: [parseInt(e.target.value), p.days[1]] }))}
-                                className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm"
-                              >
-                                  {Array.from({length: 31}, (_, i) => i + 1).map(d => (
-                                      <option key={d} value={d}>{d}</option>
-                                  ))}
-                              </select>
-                          </div>
-                          <div>
-                              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Day 2</label>
-                              <select 
-                                value={periodSettings.days[1]} 
-                                onChange={(e) => setPeriodSettings(p => ({ ...p, days: [p.days[0], parseInt(e.target.value)] }))}
-                                className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm"
-                              >
-                                  {Array.from({length: 31}, (_, i) => i + 1).map(d => (
-                                      <option key={d} value={d}>{d}</option>
-                                  ))}
-                              </select>
-                          </div>
-                      </div>
-                  )}
-
-                  <button 
-                    onClick={() => setShowReminderConfig(false)}
-                    className="w-full bg-black text-white py-3 rounded-xl font-bold"
-                  >
-                      Save Settings
-                  </button>
-              </div>
-          </div>
-      )}
-
-      {/* --- Alert Popup (Styled based on screenshot) --- */}
-      {showPeriodAlert && (
-          <div className="absolute inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-center justify-center p-6 animate-[fadeIn_0.3s]">
-              <div className="w-full max-w-[320px] bg-white rounded-3xl overflow-hidden shadow-2xl animate-[scaleIn_0.3s_cubic-bezier(0.34,1.56,0.64,1)]">
-                  {/* Header */}
-                  <div className="bg-black text-white text-center py-5">
-                      <h2 className="text-xs font-bold tracking-[0.2em] uppercase">Monthly Reminder</h2>
-                  </div>
-                  
-                  {/* Content */}
-                  <div className="p-8 flex flex-col items-center">
-                      {/* Avatars */}
-                      <div className="flex items-center gap-3 mb-6">
-                          <div className="w-10 h-10 rounded-full bg-gray-200 overflow-hidden grayscale opacity-50">
-                              <img src="https://picsum.photos/200?random=1" className="w-full h-full object-cover"/>
-                          </div>
-                          <div className="w-12 h-12 rounded-full bg-gray-200 overflow-hidden grayscale opacity-70">
-                               <img src="https://picsum.photos/200?random=2" className="w-full h-full object-cover"/>
-                          </div>
-                          <div className="w-10 h-10 rounded-full bg-gray-200 overflow-hidden grayscale opacity-50">
-                               <img src="https://picsum.photos/200?random=3" className="w-full h-full object-cover"/>
-                          </div>
-                          {/* Main Active Avatar with Indicator */}
-                          <div className="relative">
-                              <div className="w-14 h-14 rounded-full border-2 border-black overflow-hidden shadow-lg">
-                                  <img src={reminderContact?.avatar || "https://ui-avatars.com/api/?name=User"} className="w-full h-full object-cover"/>
-                              </div>
-                              <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-black rounded-full"></div>
-                          </div>
-                      </div>
-
-                      {/* Name */}
-                      <div className="self-start w-full text-left mb-3">
-                          <span className="text-xs font-bold text-gray-400">{reminderContact?.name || "Partner"}</span>
-                      </div>
-
-                      {/* Message Body - Dynamic AI Text */}
-                      <div className="text-sm text-gray-800 leading-relaxed font-medium mb-8 text-left w-full min-h-[60px] relative">
-                          {isGeneratingMessage ? (
-                              <div className="flex items-center gap-2 text-gray-400 italic">
-                                  <span className="animate-pulse">Writing care message...</span>
-                              </div>
-                          ) : (
-                              periodMessage || "Take care of yourself today. No cold drinks, okay? ❤️"
-                          )}
-                      </div>
-
-                      {/* Button */}
-                      <button 
-                        onClick={handleDismissAlert}
-                        className="bg-black text-white w-full py-3.5 rounded-full text-sm font-bold active:scale-95 transition-transform"
-                      >
-                          I received it
-                      </button>
-                  </div>
-              </div>
-          </div>
-      )}
-
+        )}
     </div>
   );
 };

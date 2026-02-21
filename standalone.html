@@ -1,4 +1,5 @@
 
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -33,15 +34,21 @@
         const { useState, useEffect, useRef, StrictMode } = React;
         const { createRoot } = ReactDOM;
 
-        // Mock process environment
-        window.process = { env: { API_KEY: '' } };
+        // Mock process environment for Standalone
+        window.process = { 
+          env: { 
+            API_KEY: '',
+            GEMINI_API_KEY: '',
+            GEMINI_API_BASE_URL: '' 
+          } 
+        };
 
         // ==========================================
         // CONSTANTS & TYPES
         // ==========================================
         const AppID = {
             Home: 'home', Chat: 'chat', WeChat: 'wechat', WorldBook: 'worldbook',
-            Beautify: 'beautify', Settings: 'settings', Phone: 'phone',
+            Beautify: 'beautify', Phone: 'phone',
             Calendar: 'calendar', CoupleSpace: 'couplespace', Mail: 'mail'
         };
 
@@ -84,9 +91,16 @@
 
         const getClient = () => {
             const settings = getSettings();
-            const apiKey = settings.apiKey || '';
+            
+            // PRIORITIZE EXTERNAL KEYS
+            const rawApiKey = settings.apiKey || window.process.env.GEMINI_API_KEY || window.process.env.API_KEY || '';
+            const apiKey = rawApiKey.trim();
+            
+            const rawBaseUrl = settings.baseUrl || window.process.env.GEMINI_API_BASE_URL || '';
+            const baseUrl = rawBaseUrl.trim().replace(/\/$/, "");
+
             const clientOptions = { apiKey };
-            if (settings.baseUrl) clientOptions.baseUrl = settings.baseUrl;
+            if (baseUrl) clientOptions.baseUrl = baseUrl;
             return { ai: new GoogleGenAI(clientOptions), model: settings.modelName || DEFAULT_MODEL };
         };
 
@@ -185,37 +199,7 @@
         // FEATURE APPS
         // ==========================================
         
-        // --- Settings ---
-        const SettingsApp = ({ onBack, isOpen }) => {
-            const [s, setS] = useState({apiKey:'', modelName: DEFAULT_MODEL, baseUrl: ''});
-            const [models, setModels] = useState([]);
-            const [loading, setLoading] = useState(false);
-            const [status, setStatus] = useState('');
-            
-            useEffect(() => { const v = localStorage.getItem(SETTINGS_KEY); if(v) setS(JSON.parse(v)); }, []);
-            const save = () => { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); setStatus('Saved'); setTimeout(()=>setStatus(''), 2000); };
-            const fetch = async () => { setLoading(true); localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); setModels(await fetchModels()); setLoading(false); };
-
-            if(!isOpen) return null;
-            return (
-                <div className="absolute inset-0 bg-gray-100 z-50 app-transition flex flex-col">
-                    <div className="h-24 bg-gray-200/80 backdrop-blur pt-12 px-4 flex justify-between items-center border-b">
-                        <button onClick={onBack} className="text-blue-500">‹ Home</button>
-                        <h1 className="font-bold">Settings</h1>
-                        <div className="w-8"></div>
-                    </div>
-                    <div className="p-4 space-y-4">
-                        <input type="password" value={s.apiKey} onChange={e=>setS({...s, apiKey:e.target.value})} placeholder="API Key" className="w-full p-3 rounded bg-white" />
-                        <div className="flex gap-2">
-                             <input type="text" value={s.modelName} onChange={e=>setS({...s, modelName:e.target.value})} className="flex-1 p-3 rounded bg-white" placeholder="Model" />
-                             <button onClick={fetch} className="bg-white px-4 rounded">{loading?'...':'Fetch'}</button>
-                        </div>
-                        {models.length>0 && <select onChange={e=>setS({...s, modelName:e.target.value})} className="w-full p-2 bg-white">{models.map(m=><option key={m} value={m}>{m}</option>)}</select>}
-                        <button onClick={save} className="w-full bg-blue-600 text-white p-3 rounded font-bold">{status||'Save'}</button>
-                    </div>
-                </div>
-            );
-        };
+        // --- Settings App Removed ---
 
         // --- Wallet ---
         const WalletApp = ({ onBack, isOpen, onUpdateTheme }) => {
@@ -610,7 +594,6 @@
                                          {id:AppID.Mail, l:'Msg', i:'✉️', c:'sky'},
                                          {id:AppID.CoupleSpace, l:'Space', i:'💌', c:'pink'},
                                          {id:AppID.Beautify, l:'Theme', i:'🎨', c:'orange'},
-                                         {id:AppID.Settings, l:'Config', i:'⚙️', c:'slate'},
                                          {id:AppID.Phone, l:'Phone', i:'📞', c:'teal'}
                                      ].map(app => (
                                          <button key={app.id} onClick={()=>setActive(app.id)} className="flex flex-col items-center gap-1 active:scale-90 transition-transform group">
@@ -629,7 +612,6 @@
                             </div>
 
                             {/* Apps Layer */}
-                            <SettingsApp isOpen={active===AppID.Settings} onBack={()=>setActive(null)} />
                             <WalletApp isOpen={active===AppID.Beautify} onBack={()=>setActive(null)} onUpdateTheme={updateTheme} />
                             <CalendarApp isOpen={active===AppID.Calendar} onBack={()=>setActive(null)} />
                             <CoupleSpaceApp isOpen={active===AppID.CoupleSpace} onBack={()=>setActive(null)} onOpenExternalApp={setActive} />
@@ -649,4 +631,3 @@
     </script>
 </body>
 </html>
-    

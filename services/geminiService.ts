@@ -1,504 +1,358 @@
+import { GoogleGenAI, Type, Schema } from "@google/genai";
+import { Contact, ChatSession, FitnessPlan, TaobaoProduct, SearchResult, Message, MessageType } from '../types';
 
-import { GoogleGenAI } from "@google/genai";
-import { AppSettings, Contact, ChatSession, FitnessPlan } from "../types";
-
-const SETTINGS_KEY = 'ephone_settings';
-const DEFAULT_MODEL = 'gemini-3-flash-preview';
-
-const FALLBACK_MODELS = [
-  'gemini-3-flash-preview',
-  'gemini-3-pro-preview',
-  'gemini-2.5-flash-image',
-  'gemini-3-pro-image-preview',
-  'veo-3.1-generate-preview',
-  'gemini-2.5-flash-preview-tts',
-  'gemini-2.5-flash-native-audio-preview-12-2025'
-];
-
-const getSettings = (): AppSettings => {
-  try {
-    const saved = localStorage.getItem(SETTINGS_KEY);
-    if (saved) {
-      return JSON.parse(saved);
+// Helper to get AI instance
+const getAI = (apiKey?: string) => {
+    const key = apiKey || process.env.API_KEY;
+    if (!key) {
+        console.warn("API Key missing");
+        // Fallback or throw error in real app
     }
-  } catch (e) {
-    console.error("Failed to parse settings", e);
-  }
-  return {
-    baseUrl: '',
-    apiKey: '',
-    modelName: DEFAULT_MODEL
-  };
+    return new GoogleGenAI({ apiKey: key || '' });
 };
 
-const getClient = () => {
-  const settings = getSettings();
-  
-  // Sanitize inputs: trim whitespace
-  const rawApiKey = settings.apiKey || process.env.API_KEY || '';
-  const apiKey = rawApiKey.trim();
-  
-  const rawBaseUrl = settings.baseUrl || '';
-  const baseUrl = rawBaseUrl.trim().replace(/\/$/, ""); // Remove trailing slash
+// --- Types ---
 
-  const clientOptions: any = { apiKey };
-  
-  // Only add baseUrl if it is not empty
-  if (baseUrl) {
-    clientOptions.baseUrl = baseUrl;
-  }
+export interface QuizData {
+    question: string;
+    options: string[];
+    correctIndex: number;
+}
 
-  // Sanitize model name
-  const modelName = (settings.modelName || DEFAULT_MODEL).trim();
+export interface PhoneContent {
+    chats: { name: string, message: string, time: string, pinned: boolean }[];
+    notes: { title: string, content: string }[];
+}
 
-  return {
-    ai: new GoogleGenAI(clientOptions),
-    model: modelName
-  };
-};
+export interface ForumContext {
+    partnerName?: string;
+    partnerPersona?: string;
+    history?: string;
+}
 
-export const fetchModels = async () => {
-  const { ai } = getClient();
-  try {
-    const response = await ai.models.list();
-    // Map response to a simple array of names
-    // Check if response.models exists (standard list response)
-    if ((response as any).models) {
-      const models = (response as any).models.map((m: any) => m.name.replace('models/', ''));
-      // Merge with fallback to ensure we have the latest ones even if list is partial
-      const uniqueModels = Array.from(new Set([...models, ...FALLBACK_MODELS]));
-      return uniqueModels;
-    }
-    return FALLBACK_MODELS;
-  } catch (error) {
-    console.warn("Error fetching models, using fallback list:", error);
-    return FALLBACK_MODELS;
-  }
-};
+export interface ForumComment {
+    author: string;
+    content: string;
+    isReply?: boolean;
+}
 
-export const generateChatResponse = async (
-  history: { role: string; content: string }[],
-  persona: string
-): Promise<string> => {
-  const { ai, model } = getClient();
-  
-  // --- Context Injection for Period Tracking ---
-  let contextNote = "";
-  try {
-      const savedPeriod = localStorage.getItem('ephone_calendar_period');
-      if (savedPeriod) {
-          const dates: string[] = JSON.parse(savedPeriod);
-          const today = new Date().toISOString().split('T')[0];
-          
-          // Check if today or yesterday was marked
-          // We check yesterday too because sometimes people mark it late or timezones differ
-          const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-          
-          if (dates.includes(today) || dates.includes(yesterday)) {
-              contextNote = `
-              [PRIVATE CONTEXT INFO - DO NOT REVEAL UNLESS PROMPTED]
-              The user has privately marked 'Period/Menstruation' on their calendar for today.
-              RULES:
-              1. DO NOT actively mention this. Ignore it completely in normal conversation.
-              2. ONLY if the user explicitly complains about pain, cramps, low mood, or feeling tired, you may take this context into account.
-              3. If you do respond to it, be brief, gentle, and sympathetic (e.g., "warm water," "rest"). 
-              4. NEVER give medical advice. NEVER sound like a period tracker app. Be a friend/partner.
-              `;
-          }
-      }
-  } catch (e) {
-      // Ignore errors in context loading
-  }
+export interface ForumPost {
+    id: string;
+    author: string;
+    title: string;
+    content: string;
+    likes: number;
+    comments: number;
+    commentList?: ForumComment[];
+}
 
-  try {
-    const systemInstruction = `
-      You are a roleplay AI character. 
-      Your persona: ${persona}
-      
-      Rules:
-      1. Stay in character at all times.
-      2. Keep responses concise and like a chat message.
-      3. Use emojis occasionally.
-      4. If the user asks for a picture, use [IMAGE: description] format.
-      ${contextNote}
-    `;
+// --- Core Functions ---
 
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: history.map(msg => ({
-        role: msg.role === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.content }]
-      })),
-      config: {
-        systemInstruction: systemInstruction,
-        temperature: 0.8,
-      }
-    });
-
-    return response.text || "...";
-  } catch (error) {
-    console.error("Gemini API Error:", error);
-    return "[Connection Error] I can't reach the server right now. Check your Settings.";
-  }
-};
-
-export const generateEventReaction = async (
-    eventType: 'RedPacket' | 'Gift',
-    detail: string,
-    characterName: string,
-    characterPersona: string
-): Promise<string> => {
-    const { ai, model } = getClient();
-
+const callAI = async (prompt: string, history: { role: string, content: string }[] = [], modelName: string = "gemini-3-flash-preview", jsonMode: boolean = false): Promise<string> => {
     try {
-        const prompt = `
-        You are ${characterName}.
-        Persona: ${characterPersona}
-        
-        Event: The user just sent you a ${eventType}.
-        Details: ${detail}
-        
-        Task: React to this event in character.
-        
-        Rules:
-        1. If it's a Red Packet:
-           - Large amount: Be surprised, happy, or refuse politely depending on persona.
-           - Small amount: Be funny, grateful, or sarcastic depending on persona.
-        2. If it's a Gift:
-           - Like it or dislike it based on your persona description.
-        3. Keep it short (chat message style). Max 30 words.
-        `;
-
-        const response = await ai.models.generateContent({
-            model: model,
-            contents: prompt,
-            config: { temperature: 0.8 }
+        const ai = getAI();
+        const model = ai.getGenerativeModel({ 
+            model: modelName,
+            generationConfig: {
+                responseMimeType: jsonMode ? "application/json" : "text/plain"
+            }
         });
 
-        return response.text || "Wow, thank you!";
+        const chat = model.startChat({
+            history: history.map(h => ({ role: h.role === 'assistant' ? 'model' : 'user', parts: [{ text: h.content }] }))
+        });
+
+        const result = await chat.sendMessage(prompt);
+        return result.response.text();
     } catch (error) {
-        return "Thank you! ❤️";
+        console.error("AI Call Failed:", error);
+        return "";
     }
 };
 
-export const interpretDream = async (dreamText: string): Promise<{ interpretation: string; visualPrompt: string }> => {
-  const { ai, model } = getClient();
-  
-  try {
-    const prompt = `
-      Analyze this dream: "${dreamText}"
-      
-      Return a JSON object with two fields:
-      1. "interpretation": A mystical and psychological interpretation of the dream.
-      2. "visualPrompt": A descriptive prompt to generate an image of this dream.
-    `;
-
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json"
-      }
-    });
-
-    const json = JSON.parse(response.text || "{}");
-    return {
-        interpretation: json.interpretation || "A mysterious dream...",
-        visualPrompt: json.visualPrompt || "Abstract dreamscape"
-    };
-  } catch (error) {
-    return {
-        interpretation: "The mists of time obscure this dream's meaning.",
-        visualPrompt: "Foggy dreamscape"
-    };
-  }
+export const fetchModels = async (config?: { apiKey?: string, baseUrl?: string, provider?: string }): Promise<string[]> => {
+    try {
+        // Note: The @google/genai SDK strictly uses constructor config.
+        // Dynamic baseUrl support depends on the specific SDK version capabilities or valid endpoints.
+        // For standard Gemini, we just list models.
+        const ai = new GoogleGenAI({ apiKey: config?.apiKey || process.env.API_KEY || '' });
+        const result = await ai.models.list();
+        return result.models ? result.models.map((m: any) => m.name.replace('models/', '')) : [];
+    } catch (e) {
+        console.error("Fetch models failed", e);
+        return [];
+    }
 };
 
-export const generateMomentsReaction = async (
-  postContent: string,
-  contacts: Contact[]
-): Promise<{ likes: string[]; comments: { contactId: string; name: string; content: string }[] }> => {
-  const { ai, model } = getClient();
-
-  const characters = contacts.map(c => `${c.id} (${c.name}): ${c.description}`).join('\n');
-
-  try {
-    const prompt = `
-      The user posted a status update on social media: "${postContent}"
-      
-      Here is a list of characters (friends):
-      ${characters}
-      
-      Decide which characters would 'like' this post and which would 'comment'.
-      Return a JSON object with:
-      1. "likes": Array of contact names who liked the post.
-      2. "comments": Array of objects { "contactId": string, "name": string, "content": string }.
-      
-      Rules:
-      - Be consistent with their personas.
-      - Not everyone has to react.
-      - Comments should be short and social.
-    `;
-
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json"
-      }
-    });
-
-    return JSON.parse(response.text || '{ "likes": [], "comments": [] }');
-  } catch (error) {
-    console.error("Moment reaction error", error);
-    return { likes: [], comments: [] };
-  }
-};
-
-export const generateAIMomentsPost = async (
-  contacts: Contact[]
-): Promise<{ contactId: string; content: string; imageDescription?: string } | null> => {
-  const { ai, model } = getClient();
-
-  // Filter out system contacts or current user if any
-  const eligibleContacts = contacts.filter(c => !c.isSystem);
-  const characters = eligibleContacts.map(c => `${c.id} (${c.name}): ${c.description}`).join('\n');
-
-  try {
-    const prompt = `
-      Select ONE character from the list below to post a new social media update (WeChat Moment).
-      
-      Characters:
-      ${characters}
-      
-      Return a JSON object with:
-      1. "contactId": The ID of the selected character.
-      2. "content": The text content of the post (casual, daily life, reflects persona).
-      3. "imageDescription": A short description of an image they might attach (optional, return null if text only).
-      
-      Rules:
-      - The content should be interesting and specific to the character's personality.
-    `;
-
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json"
-      }
-    });
-
-    return JSON.parse(response.text || 'null');
-  } catch (error) {
-    console.error("AI Post generation error", error);
-    return null;
-  }
-};
-
-export const generateCoupleInvitationReaction = async (
-  characterName: string,
-  characterPersona: string,
-  userNote: string
-): Promise<{ accepted: boolean; reply: string }> => {
-  const { ai, model } = getClient();
-
-  try {
-    const prompt = `
-      The user is inviting you (${characterName}) to open a digital "Couple Space" (a romantic relationship app feature) together.
-      
-      Your Persona: ${characterPersona}
-      User's Invitation Note: "${userNote}"
-      
-      Respond to this invitation.
-      
-      Return a JSON object with:
-      1. "accepted": Boolean (true if you accept, false if you reject based on persona - but generally lean towards accepting for this app unless the note is offensive).
-      2. "reply": A short, in-character response message to the user (max 20 words).
-    `;
-
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json"
-      }
-    });
-
-    return JSON.parse(response.text || '{ "accepted": true, "reply": "I would love to!" }');
-  } catch (error) {
-    return { accepted: true, reply: "I'd love to allow it, but my connection is weak! Let's try." };
-  }
-};
-
-export const generateDiaryReply = async (
-    userContent: string,
-    characterName: string,
-    characterPersona: string
-): Promise<string> => {
-    const { ai, model } = getClient();
+export const generateChatResponse = async (history: {role: string, content: string}[], systemContext: string) => {
+    const extendedContext = `${systemContext}
     
-    try {
-        const prompt = `
-        You are ${characterName}, currently writing a private Exchange Diary entry to your romantic partner (the user).
-        
-        Your Persona: ${characterPersona}
-        
-        The user just wrote this entry to you:
-        "${userContent}"
-        
-        Task: Write your diary entry in response.
-        Rules:
-        1. Write in FIRST PERSON (I...).
-        2. Do NOT use headers like "Dear User" or "Title". Just start writing the content.
-        3. Be intimate, vulnerable, and authentic. This is a private space.
-        4. Reference what they wrote, but also share your own feelings or small daily details.
-        5. Keep it under 150 words.
-        `;
-        
-        const response = await ai.models.generateContent({
-            model: model,
-            contents: prompt,
-            config: {
-                temperature: 0.9 // Higher creativity for letters
-            }
-        });
-        
-        return response.text || "Reading your words made me smile. I'm thinking of you too.";
-    } catch (error) {
-        return "I read your diary, but I can't find the right words right now... (Connection Error)";
-    }
+    [Capabilities]
+    1. You can send your location if asked. Format: <<<LOCATION:{"name":"Location Name", "address":"Address details"}>>>
+    2. You can update your own profile (name/persona) if the plot demands it. Format: <<<PROFILE_UPDATE:{"name":"New Name", "persona":"New Persona"}>>>
+    3. You can send money/gifts to the user.
+       - CRITICAL: If the user explicitly mentions being "poor" (穷), asks for "red packet" (红包), "pocket money" (零花钱), "transfer" (转账), or "pay me" (打钱), you MUST send a Red Packet or Transfer to help them or make them happy.
+       - Red Packet: <<<REDPACKET:{"amount": 88.88, "note": "Buy yourself coffee"}>>>
+       - Bank Transfer: <<<TRANSFER:{"amount": 5200, "note": "Pocket money"}>>>
+    
+    Only use these tags when the conversation context logically leads to it. Do not overuse.`;
+    
+    // We construct the prompt by prepending system context to the chat
+    const ai = getAI();
+    const model = ai.getGenerativeModel({ 
+        model: "gemini-3-flash-preview",
+        systemInstruction: extendedContext
+    });
+
+    const chatHistory = history.map(h => ({
+        role: h.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: h.content }]
+    }));
+
+    const lastMsg = chatHistory.pop();
+    const prevHistory = chatHistory;
+
+    if (!lastMsg) return "";
+
+    const chat = model.startChat({ history: prevHistory as any });
+    const result = await chat.sendMessage(lastMsg.parts[0].text);
+    return result.response.text();
 };
 
-export const generateWhisperNote = async (
-    partner: Contact
-): Promise<string> => {
-    const { ai, model } = getClient();
+// --- Couple Space ---
 
-    // Try to get recent chat history for context
-    let context = "";
-    try {
-        const savedChats = localStorage.getItem('ephone_chats');
-        if (savedChats) {
-            const chats: ChatSession[] = JSON.parse(savedChats);
-            const chat = chats.find(c => c.contactId === partner.id);
-            if (chat && chat.messages.length > 0) {
-                // Get last 5 messages
-                const recent = chat.messages.slice(-5).map(m => `${m.role === 'user' ? 'User' : partner.name}: ${m.content}`).join('\n');
-                context = `Recent conversation:\n${recent}`;
-            }
-        }
-    } catch (e) {
-        // Ignore context load error
-    }
-
-    try {
-        const prompt = `
-        You are ${partner.name}. You are leaving a cute "sticky note" / "post-it" message on the fridge/desk for your romantic partner (the user).
-        
-        Your Persona: ${partner.description}
-        ${context}
-        
-        Task: Write a very short, handwritten-style note.
-        Rules:
-        1. It can be sweet, flirty, funny, or slightly clingy/possessive depending on your persona.
-        2. Max 25 words. Keep it punchy.
-        3. NO greetings like "Dear User". Just the message.
-        4. Do not use emojis, as this is handwritten.
-        `;
-
-        const response = await ai.models.generateContent({
-            model: model,
-            contents: prompt,
-            config: {
-                temperature: 1.0 // High creativity for varied notes
-            }
-        });
-
-        return response.text?.trim() || "Missing you...";
-    } catch (error) {
-        return "Thinking of you...";
-    }
+export const generateCoupleInvitationReaction = async (name: string, description: string, note: string) => {
+    const prompt = `You are ${name}. ${description}. 
+    A user has invited you to a "Couple Space" with this note: "${note}".
+    Decide if you accept or reject based on your persona and the note quality.
+    Return JSON: { "accepted": boolean, "reply": string }`;
+    
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return { accepted: true, reply: "I'd love to!" }; }
 };
 
-export const generatePeriodCareMessage = async (
-    name: string,
-    persona: string
-): Promise<string> => {
-    const { ai, model } = getClient();
-    try {
-        const prompt = `
-        You are ${name}. 
-        Persona: ${persona}
-        
-        Your partner (the user) is on their period/menstruation cycle today.
-        Task: Write a short, caring, warm text message reminding them to take care.
-        Rules:
-        1. Strictly stay in character (e.g., if cold/tsundere, be slightly awkward but caring; if sweet, be very gentle).
-        2. Remind them to avoid cold food/drinks or rest well.
-        3. Keep it intimate and natural, like a WeChat/text message.
-        4. Max 40 words.
-        `;
-        
-        const response = await ai.models.generateContent({
-            model: model,
-            contents: prompt,
-            config: { temperature: 1.0 }
-        });
-        
-        return response.text || "Take care of yourself today. No cold drinks, okay? ❤️";
-    } catch (e) {
-        return "Take care of yourself today. No cold drinks, okay? ❤️";
-    }
+export const generateCoupleDiary = async (name: string, description: string, chatHistory: any[]) => {
+    const context = chatHistory.slice(-20).map(m => `${m.role}: ${m.content}`).join('\n');
+    const prompt = `You are ${name}. ${description}.
+    Based on recent chats:\n${context}\n
+    Write a short, secret diary entry (max 100 words) about your feelings for the user today.
+    Be emotional and in-character.`;
+    return await callAI(prompt);
 };
 
-export const generateFitnessPlan = async (
-    currentWeight: string,
-    targetWeight: string,
-    coachName: string,
-    coachPersona: string
-): Promise<FitnessPlan | null> => {
-    const { ai, model } = getClient();
+export const generateRelationshipQuiz = async (name: string, chatHistory: any[]): Promise<QuizData> => {
+    const prompt = `Generate a multiple choice quiz question about ${name}'s preferences or shared memories based on their persona.
+    Return JSON: { "question": string, "options": string[], "correctIndex": number }`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return { question: "Do you love me?", options: ["Yes","No"], correctIndex: 0 }; }
+};
 
-    try {
-        const prompt = `
-        You are ${coachName}, a fitness coach.
-        Your Persona: ${coachPersona}
-        
-        User Stats:
-        Current Weight: ${currentWeight}
-        Target Weight: ${targetWeight}
-        
-        Task: Create a 1-day personalized fitness & diet plan for the user to help them reach their goal.
-        
-        Return STRICT JSON format with the following structure:
-        {
-            "coachMessage": "A short, in-character motivational message (max 30 words).",
-            "diet": {
-                "breakfast": "Breakfast recommendation",
-                "lunch": "Lunch recommendation",
-                "dinner": "Dinner recommendation",
-                "tips": "One key diet tip"
-            },
-            "workout": {
-                "warmup": "Warmup exercise",
-                "main": "Main workout routine details",
-                "cooldown": "Cooldown routine",
-                "duration": "Estimated duration (e.g. 45 mins)"
-            }
-        }
-        `;
+export const generateLoveLetter = async (name: string, description: string, trigger: string) => {
+    const prompt = `You are ${name}. ${description}.
+    Write a love letter (Time Capsule) for the user. Trigger event: "${trigger}".
+    Return JSON: { "title": string, "content": string }`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return { title: "To You", content: "I love you." }; }
+};
 
-        const response = await ai.models.generateContent({
-            model: model,
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json"
-            }
-        });
+// --- Calendar ---
 
-        return JSON.parse(response.text || 'null');
-    } catch (error) {
-        console.error("Fitness generation error", error);
-        return null;
-    }
+export const generateDiaryReply = async (userContent: string, name: string, persona: string) => {
+    const prompt = `You are ${name}. ${persona}.
+    The user wrote this in your shared exchange diary: "${userContent}".
+    Write a warm, handwritten-style reply (max 100 words).`;
+    return await callAI(prompt);
+};
+
+export const generatePeriodCareMessage = async (name: string, description: string) => {
+    const prompt = `You are ${name}. ${description}.
+    Your partner is on their period. Write a short, caring, warm message reminding them to rest and avoid cold water.`;
+    return await callAI(prompt);
+};
+
+// --- Phone Investigation ---
+
+export const generateCharacterPhoneContent = async (name: string, description: string): Promise<PhoneContent | null> => {
+    const prompt = `Generate fake phone content for character "${name}" (${description}).
+    1. 3-5 Chat threads (WeChat style). Some pinned.
+    2. 3-5 Notes (diary or memos).
+    Return JSON: {
+      "chats": [{ "name": string, "message": string, "time": string, "pinned": boolean }],
+      "notes": [{ "title": string, "content": string }]
+    }`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return null; }
+};
+
+export const generateCharacterQuestion = async (name: string, description: string, chatContext: string) => {
+    const prompt = `You are ${name}. ${description}.
+    Ask the user an anonymous question in a "Question Box". It can be shy, curious, or teasing.
+    Context: ${chatContext.slice(0, 500)}`;
+    return await callAI(prompt);
+};
+
+export const answerUserQuestion = async (name: string, description: string, question: string) => {
+    const prompt = `You are ${name}. ${description}.
+    Answer this anonymous question from the user: "${question}".`;
+    return await callAI(prompt);
+};
+
+// --- Shared Phone ---
+
+export const generateWhisperNote = async (partner: Contact) => {
+    const prompt = `You are ${partner.name}. ${partner.description}.
+    Write a short sticky note (whisper) to leave on the user's phone home screen. Cute/Romantic/Funny. Max 10 words.`;
+    return await callAI(prompt);
+};
+
+// --- Music ---
+
+export const searchMusic = async (query: string): Promise<SearchResult[]> => {
+    const prompt = `Simulate a music search for "${query}".
+    Return 5 results JSON: [{ "id": string, "title": string, "artist": string, "cover": string }]
+    Use picsum for covers.`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return []; }
+};
+
+// --- Fitness ---
+
+export const generateFitnessPlan = async (current: string, target: string, coachName: string, coachPersona: string): Promise<FitnessPlan | null> => {
+    const prompt = `You are fitness coach ${coachName}. ${coachPersona}.
+    User: Current ${current}, Target ${target}.
+    Create a daily plan JSON:
+    {
+      "coachMessage": string (motivational),
+      "diet": { "breakfast": string, "lunch": string, "dinner": string, "tips": string },
+      "workout": { "warmup": string, "main": string, "cooldown": string, "duration": string }
+    }`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return null; }
+};
+
+// --- Browser ---
+
+export const performWebSearch = async (query: string): Promise<SearchResult[]> => {
+    const prompt = `Simulate web search results for "${query}".
+    Return 5 results JSON: [{ "id": string, "title": string, "url": string, "snippet": string }]`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return []; }
+};
+
+export const generateWebPageContent = async (url: string, title: string, snippet: string) => {
+    const prompt = `Generate the full markdown content of a webpage.
+    URL: ${url}
+    Title: ${title}
+    Context: ${snippet}
+    Make it look like a real article or page.`;
+    return await callAI(prompt);
+};
+
+// --- Weather ---
+
+export const getWeatherReport = async (temp: number, condition: string) => {
+    const prompt = `Write a short, witty, or poetic weather vibe report.
+    Temp: ${temp}C, Condition: ${condition}. Max 2 sentences.`;
+    return await callAI(prompt);
+};
+
+// --- Taobao ---
+
+export const performProductSearch = async (term: string): Promise<TaobaoProduct[]> => {
+    const prompt = `Simulate Taobao search results for "${term}".
+    Return 6 products JSON: [{ "id": string, "title": string, "price": number, "shop": string, "sales": string, "image": string }]
+    Use picsum for images.`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return []; }
+};
+
+export const generateTaobaoCSResponse = async (history: {role: string, content: string}[], productInfo: string) => {
+    const prompt = `You are a helpful Taobao customer service agent (亲, ...).
+    Product: ${productInfo}.
+    User query history provided. Answer politely and professionally.`;
+    return await generateChatResponse(history, prompt); // Reuse chat logic
+};
+
+export const evaluatePayRequest = async (name: string, description: string, productTitle: string, amount: number, note: string) => {
+    const prompt = `You are ${name}. ${description}.
+    User sent a "Pay for me" request for "${productTitle}" (Price: ${amount}). Note: "${note}".
+    Decide whether to pay.
+    Return JSON: { "agreed": boolean, "reply": string (your reaction text) }`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return { agreed: true, reply: "Sure, bought it!" }; }
+};
+
+// --- Forum ---
+
+export const generateForumFeed = async (topic?: string, context?: ForumContext): Promise<ForumPost[]> => {
+    const prompt = `Generate 5 social media/forum posts JSON.
+    Topic: ${topic || 'General'}.
+    Context: ${JSON.stringify(context || {})}.
+    Format: [{ "id": string, "author": string, "title": string, "content": string, "likes": number, "comments": number }]`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return []; }
+};
+
+export const generateTrendingTopics = async (context?: ForumContext) => {
+    const prompt = `Generate 10 trending fictional hashtags/topics for a social media app. JSON string array.`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return ["#Trend1", "#Trend2"]; }
+};
+
+export const generateTacitQuiz = async (partnerName: string): Promise<QuizData> => {
+    const prompt = `Create a tacit understanding quiz question about ${partnerName}.
+    JSON: { "question": string, "options": string[], "correctIndex": number }`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return { question: "Error", options: [], correctIndex: 0 }; }
+};
+
+export const getPartnerQuizAnswer = async (question: string, options: string[], partnerName: string, partnerDesc: string) => {
+    const prompt = `You are ${partnerName}. ${partnerDesc}.
+    Question: "${question}"
+    Options: ${JSON.stringify(options)}
+    Which option do you choose? Why?
+    JSON: { "answerIndex": number, "comment": string }`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return { answerIndex: 0, comment: "I guess..." }; }
+};
+
+export const generateSuperTopicFeed = async (topicName: string): Promise<ForumPost[]> => {
+    return generateForumFeed(topicName); // Reuse
+};
+
+export const generateForumComments = async (postContent: string, contacts: Contact[]) => {
+    const prompt = `Simulate comments from these characters: ${contacts.map(c=>c.name).join(', ')} 
+    on this post: "${postContent}".
+    JSON: { "likes": number, "comments": [{ "author": string, "content": string }] }`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return { likes: 0, comments: [] }; }
+};
+
+export const generateAIMomentsPost = async (contacts: Contact[], allChats: ChatSession[]) => {
+    if (contacts.length === 0) return null;
+    const author = contacts[Math.floor(Math.random() * contacts.length)];
+    const prompt = `You are ${author.name}. ${author.description}.
+    Write a social media post (Moments) based on your recent interactions or mood.
+    Return JSON: { "contactId": "${author.id}", "content": string }`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return null; }
+};
+
+export const generateMomentReply = async (name: string, description: string, postContent: string, userComment: string) => {
+    const prompt = `You are ${name}. ${description}.
+    Your Post: "${postContent}"
+    User Comment: "${userComment}"
+    Reply to the comment.`;
+    return await callAI(prompt);
+};
+
+// --- Bookstore ---
+
+export const generateMiniFiction = async (charName: string, charDesc: string, genre: string) => {
+    const prompt = `Write a mini fiction (500 words).
+    Protagonist: ${charName} (${charDesc}).
+    Genre: ${genre}.
+    JSON: { "title": string, "content": string }`;
+    const res = await callAI(prompt, [], "gemini-3-flash-preview", true);
+    try { return JSON.parse(res); } catch { return { title: "Error", content: "Failed to generate." }; }
 };

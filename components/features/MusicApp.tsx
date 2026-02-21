@@ -1,5 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
+import { searchMusic } from '../../services/geminiService';
 
 interface MusicAppProps {
   onBack: () => void;
@@ -58,7 +59,13 @@ const MusicApp: React.FC<MusicAppProps> = ({ onBack, isOpen }) => {
   // Customization State
   const [background, setBackground] = useState<string | null>(() => localStorage.getItem('music_custom_bg'));
   const [showMenu, setShowMenu] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
   
+  // Search State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<Track[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+
   // Add URL State
   const [addUrlInputs, setAddUrlInputs] = useState({ url: '', title: '', artist: '' });
 
@@ -238,6 +245,39 @@ const MusicApp: React.FC<MusicAppProps> = ({ onBack, isOpen }) => {
       setShowMenu(false);
   };
 
+  // --- Search Handlers ---
+  const handleSearchMusic = async () => {
+      if (!searchQuery.trim()) return;
+      setIsSearching(true);
+      try {
+          const results = await searchMusic(searchQuery);
+          // Map to internal Track format
+          const mappedResults: Track[] = results.map((r: any) => ({
+              id: r.id,
+              title: r.title,
+              artist: r.artist || "Unknown Artist",
+              cover: r.cover || "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?q=80&w=600&auto=format&fit=crop",
+              url: "", // Simulated audio for search results
+              duration: 180, // Simulated duration
+              isLocal: false
+          }));
+          setSearchResults(mappedResults);
+      } catch (e) {
+          alert("Search failed.");
+      } finally {
+          setIsSearching(false);
+      }
+  };
+
+  const playSearchResult = (track: Track) => {
+      setPlaylist(prev => [track, ...prev]);
+      setCurrentTrackIndex(0);
+      setIsPlaying(true);
+      setShowSearch(false);
+      setSearchQuery('');
+      setSearchResults([]);
+  };
+
   if (!isOpen) return null;
 
   const track = playlist[currentTrackIndex];
@@ -268,16 +308,66 @@ const MusicApp: React.FC<MusicAppProps> = ({ onBack, isOpen }) => {
            <button onClick={onBack} className="w-8 h-8 flex items-center justify-center bg-white/10 rounded-full backdrop-blur-md hover:bg-white/20 transition-colors">
                ‹
            </button>
-           <span className="text-xs font-bold tracking-widest uppercase opacity-70">
-               {track.isLocal ? 'Local Audio' : 'Music Player'}
-           </span>
-           <button 
-                onClick={() => setShowMenu(!showMenu)}
-                className="w-8 h-8 flex items-center justify-center bg-white/10 rounded-full backdrop-blur-md hover:bg-white/20 transition-colors"
-           >
-               •••
-           </button>
+           <div className="flex flex-col items-center">
+               <span className="text-xs font-bold tracking-widest uppercase opacity-70">
+                   {track.isLocal ? 'Local Audio' : 'Music Player'}
+               </span>
+           </div>
+           <div className="flex gap-3">
+               <button 
+                    onClick={() => setShowSearch(true)}
+                    className="w-8 h-8 flex items-center justify-center bg-white/10 rounded-full backdrop-blur-md hover:bg-white/20 transition-colors"
+               >
+                   🔍
+               </button>
+               <button 
+                    onClick={() => setShowMenu(!showMenu)}
+                    className="w-8 h-8 flex items-center justify-center bg-white/10 rounded-full backdrop-blur-md hover:bg-white/20 transition-colors"
+               >
+                   •••
+               </button>
+           </div>
        </div>
+
+       {/* Search Overlay */}
+       {showSearch && (
+           <div className="absolute inset-0 z-[60] bg-black/95 backdrop-blur-xl flex flex-col animate-[fadeIn_0.2s]">
+               <div className="h-24 pt-12 px-4 flex items-center gap-3 border-b border-white/10">
+                   <div className="flex-1 bg-white/10 rounded-full flex items-center px-4 py-2">
+                       <span className="text-gray-400 mr-2">🔍</span>
+                       <input 
+                           type="text" 
+                           value={searchQuery}
+                           onChange={(e) => setSearchQuery(e.target.value)}
+                           onKeyDown={(e) => e.key === 'Enter' && handleSearchMusic()}
+                           placeholder="Search songs, artists..." 
+                           className="bg-transparent outline-none w-full text-sm"
+                           autoFocus
+                       />
+                   </div>
+                   <button onClick={() => setShowSearch(false)} className="text-sm font-bold">Cancel</button>
+               </div>
+               
+               <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                   {isSearching ? (
+                       <div className="text-center text-gray-500 mt-10">Searching...</div>
+                   ) : searchResults.length > 0 ? (
+                       searchResults.map(res => (
+                           <div key={res.id} onClick={() => playSearchResult(res)} className="flex items-center gap-3 p-2 hover:bg-white/10 rounded-lg cursor-pointer">
+                               <img src={res.cover} className="w-12 h-12 rounded-md object-cover" />
+                               <div className="flex-1">
+                                   <div className="font-bold text-sm">{res.title}</div>
+                                   <div className="text-xs text-gray-400">{res.artist}</div>
+                               </div>
+                               <button className="text-xs bg-white/20 px-2 py-1 rounded-full">Play</button>
+                           </div>
+                       ))
+                   ) : (
+                       <div className="text-center text-gray-600 mt-10 text-xs">Enter keywords to search for music</div>
+                   )}
+               </div>
+           </div>
+       )}
 
        {/* Settings Menu Overlay */}
        {showMenu && (
@@ -349,7 +439,7 @@ const MusicApp: React.FC<MusicAppProps> = ({ onBack, isOpen }) => {
            <div className="text-center space-y-1 w-full px-8">
                <h2 className="text-2xl font-bold truncate">{track.title}</h2>
                <p className="text-gray-400 text-sm truncate">{track.artist}</p>
-               {!track.url && <span className="text-[10px] text-gray-500 bg-gray-800 px-2 py-0.5 rounded">Demo / No Audio</span>}
+               {!track.url && <span className="text-[10px] text-gray-500 bg-gray-800 px-2 py-0.5 rounded">Demo / Simulated</span>}
            </div>
 
            {/* Controls */}

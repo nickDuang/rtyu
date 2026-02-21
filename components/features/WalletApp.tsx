@@ -5,7 +5,7 @@ import { Product, AppID } from '../../types';
 interface WalletAppProps {
   onBack: () => void;
   isOpen: boolean;
-  onUpdateTheme: (type: 'wallpaper' | 'icon' | 'font', id: string | null, value: string) => void;
+  onUpdateTheme: (type: 'wallpaper' | 'icon' | 'font' | 'name', id: string | null, value: string) => void;
 }
 
 const WalletApp: React.FC<WalletAppProps> = ({ onBack, isOpen, onUpdateTheme }) => {
@@ -15,10 +15,20 @@ const WalletApp: React.FC<WalletAppProps> = ({ onBack, isOpen, onUpdateTheme }) 
       return saved ? parseFloat(saved) : 1250.50;
   });
 
+  const [customNames, setCustomNames] = useState<Record<string, string>>({});
+
   // Save balance
   useEffect(() => {
       localStorage.setItem('ephone_balance', balance.toString());
   }, [balance]);
+
+  // Load names
+  useEffect(() => {
+      if (isOpen) {
+          const savedNames = localStorage.getItem('ephone_app_names');
+          if (savedNames) setCustomNames(JSON.parse(savedNames));
+      }
+  }, [isOpen]);
 
   const [activeTab, setActiveTab] = useState<'wallet' | 'market' | 'custom'>('custom');
   
@@ -88,15 +98,24 @@ const WalletApp: React.FC<WalletAppProps> = ({ onBack, isOpen, onUpdateTheme }) 
       setFontUrl('');
   };
 
+  const handleNameChange = (id: string, newName: string) => {
+      const updated = { ...customNames, [id]: newName };
+      setCustomNames(updated);
+      // Debounce or just save on blur usually, but for simplicity:
+      onUpdateTheme('name', id, newName);
+  };
+
   const customizableApps = [
       { id: AppID.WeChat, name: 'WeChat' },
       { id: AppID.WorldBook, name: 'World Book' },
-      { id: AppID.Settings, name: 'Settings' },
       { id: AppID.Beautify, name: 'Beautify' },
       { id: AppID.Mail, name: 'Messages' },
       { id: AppID.Phone, name: 'Phone' },
       { id: AppID.Calendar, name: 'Calendar' },
       { id: AppID.CoupleSpace, name: 'Couple Space' },
+      { id: AppID.Taobao, name: 'Taobao' },
+      { id: AppID.Weather, name: 'Weather' },
+      { id: AppID.Bookstore, name: 'Novel Store' },
   ];
 
   if (!isOpen) return null;
@@ -208,18 +227,23 @@ const WalletApp: React.FC<WalletAppProps> = ({ onBack, isOpen, onUpdateTheme }) 
                 {/* Icons Section */}
                 <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
                     <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-                        <span>📱</span> App Icons
+                        <span>📱</span> App Icons & Names
                     </h3>
-                    <div className="grid grid-cols-4 gap-4">
+                    <div className="grid grid-cols-3 gap-4">
                         {customizableApps.map(app => (
-                            <div key={app.id} className="flex flex-col items-center gap-2">
+                            <div key={app.id} className="flex flex-col items-center gap-2 p-2 rounded-xl border border-gray-50 bg-gray-50/50">
                                 <div 
                                     onClick={() => iconRefs.current[app.id]?.click()}
-                                    className="w-14 h-14 bg-gray-100 rounded-2xl flex items-center justify-center text-gray-400 cursor-pointer hover:ring-2 hover:ring-pink-400 transition-all border border-gray-200"
+                                    className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-gray-400 cursor-pointer shadow-sm hover:ring-2 hover:ring-pink-400 transition-all border border-gray-100"
                                 >
-                                    <span className="text-xl">✏️</span>
+                                    <span className="text-lg">📷</span>
                                 </div>
-                                <span className="text-[10px] text-gray-500 font-medium text-center truncate w-full">{app.name}</span>
+                                <input 
+                                    value={customNames[app.id] !== undefined ? customNames[app.id] : app.name}
+                                    onChange={(e) => handleNameChange(app.id, e.target.value)}
+                                    placeholder="Name"
+                                    className="w-full text-[10px] text-center bg-transparent border-b border-gray-300 focus:border-pink-500 outline-none p-1 text-gray-600"
+                                />
                                 <input 
                                     type="file"
                                     ref={(el) => { iconRefs.current[app.id] = el; }}
