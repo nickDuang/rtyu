@@ -16,6 +16,7 @@ import TaobaoApp from './components/features/TaobaoApp';
 import PaymentApp from './components/features/PaymentApp';
 import ForumApp from './components/features/ForumApp'; 
 import BookstoreApp from './components/features/BookstoreApp';
+import LibraryApp from './components/features/LibraryApp';
 import WeatherApp from './components/features/WeatherApp';
 import BrowserApp from './components/features/BrowserApp';
 import CalculatorApp from './components/features/CalculatorApp';
@@ -457,6 +458,7 @@ const App: React.FC = () => {
           [AppID.Weather]: { label: 'Weather', icon: '🌤️' },
           [AppID.ReverseInvestigation]: { label: '查岗', icon: '👁️' },
           [AppID.Archive]: { label: '档案', icon: '📁' },
+          [AppID.Library]: { label: '图书室', icon: '📚' },
       };
       return map[id] || { label: 'App', icon: '?' };
   };
@@ -754,9 +756,10 @@ const App: React.FC = () => {
                             <MinimalAppIcon id={AppID.Archive} {...getAppProps(AppID.Archive)} index={101} />
                         </div>
                         
-                        {/* Column 2: Reverse Investigation */}
+                        {/* Column 2: Reverse Investigation + Library */}
                         <div className="flex flex-col gap-3">
                             <MinimalAppIcon id={AppID.ReverseInvestigation} {...getAppProps(AppID.ReverseInvestigation)} index={100} />
+                            <MinimalAppIcon id={AppID.Library} {...getAppProps(AppID.Library)} index={102} />
                         </div>
                     </div>
                 </div>
@@ -816,6 +819,7 @@ const App: React.FC = () => {
             <PaymentApp isOpen={activeApp === AppID.Payment} onBack={() => setActiveApp(null)} />
             <ForumApp isOpen={activeApp === AppID.Forum} onBack={() => setActiveApp(null)} />
             <BookstoreApp isOpen={activeApp === AppID.Bookstore} onBack={() => setActiveApp(null)} />
+            <LibraryApp isOpen={activeApp === AppID.Library} onBack={() => setActiveApp(null)} />
             <WeatherApp isOpen={activeApp === AppID.Weather} onBack={() => setActiveApp(null)} />
             <BrowserApp isOpen={false} onBack={() => setActiveApp(null)} />
             <CalculatorApp isOpen={false} onBack={() => setActiveApp(null)} />

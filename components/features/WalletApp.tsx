@@ -116,6 +116,7 @@ const WalletApp: React.FC<WalletAppProps> = ({ onBack, isOpen, onUpdateTheme }) 
       { id: AppID.Taobao, name: 'Taobao' },
       { id: AppID.Weather, name: 'Weather' },
       { id: AppID.Bookstore, name: 'Novel Store' },
+      { id: AppID.Library, name: 'Library' },
   ];
 
   if (!isOpen) return null;

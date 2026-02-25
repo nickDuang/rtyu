@@ -85,7 +85,22 @@ export const fetchModels = async (config?: { apiKey?: string, baseUrl?: string, 
 };
 
 export const generateChatResponse = async (history: {role: string, content: string}[], systemContext: string) => {
-    const extendedContext = `${systemContext}
+    let libraryContext = '';
+    try {
+        const savedBooks = localStorage.getItem('ephone_library_books');
+        if (savedBooks) {
+            const books = JSON.parse(savedBooks);
+            const globalBooks = books.filter((b: any) => b.isGlobal);
+            if (globalBooks.length > 0) {
+                libraryContext = '\n\n[Global Library Settings (High Priority)]\n' + 
+                    globalBooks.map((b: any) => `--- ${b.title} (${b.category}) ---\n${b.content}`).join('\n\n');
+            }
+        }
+    } catch (e) {
+        console.error("Failed to load library books", e);
+    }
+
+    const extendedContext = `${systemContext}${libraryContext}
     
     [Capabilities]
     1. You can send your location if asked. Format: <<<LOCATION:{"name":"Location Name", "address":"Address details"}>>>

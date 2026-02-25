@@ -17,6 +17,7 @@ export enum AppID {
   Taobao = 'taobao',
   Payment = 'payment',
   Bookstore = 'bookstore',
+  Library = 'library',
   Weather = 'weather',
   ReverseInvestigation = 'reverse_investigation', // New App
   Forum = 'forum',
